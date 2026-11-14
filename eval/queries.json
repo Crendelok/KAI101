@@ -1,0 +1,22 @@
+{
+  "_rule": "A section is relevant if it comes from one of the listed books. Queries avoid character names on purpose, so ranking has to work for it.",
+  "queries": [
+    {"q": "whale ship captain harpoon", "books": ["Moby-Dick"]},
+    {"q": "detective crime clue", "books": ["The Adventures of Sherlock Holmes"]},
+    {"q": "vampire blood garlic", "books": ["Dracula"]},
+    {"q": "battle emperor army retreat", "books": ["War and Peace"]},
+    {"q": "prince fortune cruelty state", "books": ["The Prince"]},
+    {"q": "marriage fortune ball sisters", "books": ["Pride and Prejudice"]},
+    {"q": "pirates treasure island map", "books": ["Treasure Island"]},
+    {"q": "creature creation science despair", "books": ["Frankenstein"]},
+    {"q": "sovereign commonwealth covenant", "books": ["Leviathan"]},
+    {"q": "justice soul guardians city", "books": ["The Republic"]}
+  ],
+  "paraphrases": [
+    {"q": "a sailor obsessed with hunting a giant sea creature", "books": ["Moby-Dick"]},
+    {"q": "an undead nobleman who drinks human blood", "books": ["Dracula"]},
+    {"q": "a scientist who brings a dead body back to life", "books": ["Frankenstein"]},
+    {"q": "how a ruler should keep power over his subjects", "books": ["The Prince"]},
+    {"q": "a young girl falls down a hole into a strange land", "books": ["Alice's Adventures in Wonderland"]}
+  ]
+}

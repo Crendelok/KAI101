@@ -156,3 +156,84 @@ Positions add ~23 MiB, about 2.3× the postings alone, and build peak memory goe
 The positions flag stays on: phrase queries and snippets depend on it. The lazy load costs
 about the same whether or not positions are stored, because it only parses the header and maps
 the file.
+
+## Lab 03 — ranking, the query language, and a real `Index`
+
+```bash
+uv run python -m findex.search index.fidx '"white whale" captain' --k 3 --repeat 2 -v
+uv run python scripts/eval_lab03.py index.fidx
+```
+
+* **`Index` is a `collections.abc.Mapping[str, PostingList]`:** `len(ix)`, `"whale" in ix`, `ix["whale"]`
+  (`KeyError` if absent), `for term in ix`, `repr(ix)`. Also `num_docs`, `avg_doc_length`
+  (`cached_property`), `doc_length()`, `df()`, `text()`. `Mapping` brings an `__eq__`, which sets
+  `__hash__ = None`, so `Index` restores identity equality and hashing: an index is an entity, not
+  a value, and the query cache needs to hash it. `store.open_index()` is a `@contextmanager` that
+  closes the mmap even when the `with` body raises (tested).
+* **Ranking (`scoring.py`):** a `Scorer` protocol with `score(term, posting, index)`, implemented
+  by `TfIdf` and `BM25(k1=1.5, b=0.75)`. `search()` adds up scores per document and takes the top k
+  with `heapq.nlargest` (O(n log k), not O(n log n)). It returns a `ResultList`, a `Sequence` whose
+  slices keep `.total`, made of `SearchResult` dataclasses with `order=True` that sort best-first.
+* **Query language (`query.py`):** a recursive-descent parser builds `Term` / `Phrase` / `And` / `Or` / `Not`
+  frozen dataclasses (which overload `&`, `|`, `~`). It handles implicit AND, `OR`, `NOT`,
+  parentheses and `"quoted phrases"` (checked against positions). Tests compare trees, for example
+  `parse('a OR b c') == Or(Term('a'), And(Term('b'), Term('c')))`. `a NOT b` is evaluated as a
+  difference, never as "everything minus b".
+* **Decorators and caching:** `@timed` (with `functools.wraps`) on `build_index`, `save`, `load`,
+  `matching_ids`, `search`. `functools.lru_cache(256)` on query → matching ids. In the log below,
+  a repeated query skips parsing and evaluation:
+
+  ```text
+  DEBUG findex.timing: matching_ids took 1.5 ms
+  DEBUG findex.timing: search took 2.1 ms
+  DEBUG __main__: query cache hit for '"white whale" captain'
+  DEBUG findex.timing: matching_ids took 0.1 ms
+  DEBUG findex.timing: search took 0.5 ms
+  ```
+* **Snippets (`snippets.py`):** a ±80-character window centred on the match that covers the most
+  distinct query terms, snapped to word boundaries, with spans the caller renders as `«plain»`,
+  rich markup, or `<mark>`-escaped HTML.
+
+  ```text
+  1.  15.472  Moby-Dick — part 43/141
+      …“«Captain» Ahab,” said Tashtego, “that «white» «whale» must be the same that some call…
+  ```
+
+### Ranking sanity checks (BM25, real corpus)
+
+1. **Rare beats common.** `harpoon` has df 40 and idf 4.56; `sea` has df 687 and idf 1.73. For
+   `harpoon OR sea`, all 5 of the top 5 contain `harpoon`, even though hundreds of sections say
+   `sea` more often.
+2. **Saturation.** At average length, the BM25 tf weight for tf = 1, 2, 5, 10, 19, 20 is 1.000,
+   1.429, 1.923, 2.174, 2.317, 2.326. The 20th repetition adds 0.0085, 0.9% of what the first one
+   added. (TF-IDF's `1 + ln tf` would still add 0.05.)
+3. **Short beats long.** `telescope` appearing once in a 1,175-token section scores 5.601; once in
+   a 1,571-token section, 4.955. The same checks run as unit tests on the fixture corpus
+   (`tests/test_search.py`).
+
+### precision@5 — TF-IDF vs BM25
+
+Ten queries written to avoid character names. A section counts as relevant if it comes from the
+book the query is about (`eval/queries.json`). The words are OR-ed so ranking decides.
+
+| Query | Relevant book | TF-IDF | BM25 |
+|---|---|---|---|
+| whale ship captain harpoon | Moby-Dick | 1.0 | 1.0 |
+| detective crime clue | The Adventures of Sherlock Holmes | 0.6 | 0.8 |
+| vampire blood garlic | Dracula | 0.8 | 0.8 |
+| battle emperor army retreat | War and Peace | 0.8 | 0.8 |
+| prince fortune cruelty state | The Prince | 1.0 | 1.0 |
+| marriage fortune ball sisters | Pride and Prejudice | 0.8 | 1.0 |
+| pirates treasure island map | Treasure Island | 1.0 | 0.8 |
+| creature creation science despair | Frankenstein | 0.8 | 0.8 |
+| sovereign commonwealth covenant | Leviathan | 1.0 | 1.0 |
+| justice soul guardians city | The Republic | 1.0 | 1.0 |
+| **mean** | | **0.88** | **0.90** |
+
+The sample is small and noisy, and both scorers are good when the words are distinctive. The
+differences come from saturation. For *detective crime clue*, TF-IDF lets a *Tom Sawyer* section
+into the top 5 on the strength of repeating one word; under BM25 extra repetitions are worth
+little, so a fourth Holmes story takes that place. Saturation also explains BM25's one loss: on
+*pirates treasure island map*, Treasure Island's sections no longer get much credit for saying
+"island" and "treasure" over and over, so an *Odyssey* section about islands reaches #2. Sections
+are all about 1,500 words, so length normalization barely matters here.
