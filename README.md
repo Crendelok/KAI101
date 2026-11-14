@@ -410,3 +410,99 @@ thread its own state and merge.
 
 **Default:** `--executor processes --workers min(8, cpu_count)`. It wins on the standard GIL
 build. On a free-threaded interpreter, `--executor threads` is equally fast and lighter.
+
+## Lab 06 — the async crawler
+
+**What it crawls, and permission.** It only crawls `scripts/site_server.py`, a local mirror of
+this corpus served as HTML across five "hosts" (ports 8101–8105 on 127.0.0.1). We own it, it has a
+`robots.txt` that disallows `/private/`, and it adds realistic friction: 50–150 ms latency per
+response, a one-time `429 Retry-After: 1` on ~1 in 20 pages, a one-time `503` on ~1 in 30, and
+`/old/…` URLs that 301-redirect. The crawler is general, but point it at a real site only if its
+`robots.txt` and terms allow it, and set `--contact` to a real URL.
+
+```bash
+python scripts/site_server.py &                                   # the mirror
+findex crawl http://127.0.0.1:8101/ --max-pages 200 --concurrency 20 --per-host 4 \
+    --out data/crawl.jsonl --log crawl.log --contact https://github.com/OWNER/REPO
+findex index data/crawl.jsonl --out crawl.fidx                    # indexing happens *after*, outside the loop
+findex search crawl.fidx whale
+uv run python scripts/bench_lab06.py --max-pages 200              # the table below
+```
+
+* **`crawler/fetch.py`:** `async def fetch()` wraps each attempt in `asyncio.timeout()`. It
+  retries 429, 5xx, timeouts and connection errors up to 3 times, with exponential backoff and
+  jitter (`base·2ⁿ⁻¹ + U(0, base)`). A `Retry-After` header (seconds or an HTTP date, capped at
+  60 s) overrides the backoff. Other 4xx responses and redirect loops are final.
+* **`crawler/robots.py`:** `RobotsCache` fetches `robots.txt` once per origin, behind a per-origin
+  lock, and follows RFC 9309. A 4xx means everything is allowed; a 5xx or unreachable file means
+  nothing is. The `User-Agent` is honest: `findex-crawler/<version> (+<contact>; polite educational crawler)`.
+* **`crawler/crawl.py`:** `crawl()` is an **async generator**. It has an `asyncio.Queue` frontier,
+  `concurrency` workers in a `TaskGroup`, a global semaphore, a per-host semaphore, and a per-host
+  minimum delay (raised to `Crawl-delay` when robots.txt asks). URLs are canonicalized and checked
+  against a `seen` set (`crawler/urls.py`: lowercase scheme and host, default port dropped,
+  fragment stripped, dot segments resolved, query sorted, trailing slash ignored for dedup), and
+  only allowed domains are followed. The page budget is claimed *before* awaiting, so it can't be
+  overshot. At the budget the crawl lets in-flight visits finish, cancels the workers, and closes
+  the client. HTML parsing runs in `asyncio.to_thread`.
+* **`findex crawl`:** writes one JSON line per page *as it arrives*, shows a `rich` live panel
+  (pages, pages/s, in flight, queue depth, errors, retries, robots-blocked), and logs one line
+  per URL to `crawl.log`.
+* **Tests:** 23 tests run against `httpx.MockTransport`, with no network. They cover
+  canonicalization, `Retry-After` being honored, growing backoff on 5xx, no retry on 404,
+  timeouts that give up, redirect loops, the three robots.txt cases, HTML extraction, a crawl
+  that visits each page once while obeying robots.txt and the allowlist, the budget, and the
+  per-host limit, which is checked under load.
+
+### Benchmark (same seed, budget 200 fetches, fresh mirror per run)
+
+| Concurrency | Per host | Pages | Wall (s) | Pages/s | Errors | Retried | Peak RSS | Slow callbacks (debug run) |
+|---|---|---|---|---|---|---|---|---|
+| 1 (sequential) | 2 | 200 | 38.1 | 5.2 | 0 | 15 | 49 MiB | 4 |
+| 5 | 2 | 169 | 9.5 | 17.8 | 0 | 13 | 49 MiB | 1 |
+| 20 | 2 | 182 | 5.7 | 32.2 | 0 | 9 | 49 MiB | 1 |
+| 20 | 4 | 184 | 4.1 | 44.8 | 0 | 11 | 49 MiB | 2 |
+
+(Fewer than 200 *pages* at higher concurrency: the budget counts *fetches*. Some fetches were
+`/old/…` redirects to pages already emitted, which are deduplicated. Retries vary because the
+crawl order, and so which pages get the one-time 429/503, varies.)
+
+**Why concurrency 20 in one thread beat Lab 5's approach here.** A crawler spends almost all its
+time waiting: ~100 ms of network latency against microseconds of CPU per page. While one
+coroutine awaits a socket, the event loop runs the others. One thread with 20 requests in flight
+gets 6.7× more pages per second than sequential, with no GIL contention, no process startup, no
+pickling, and a flat 49 MiB of memory. Lab 5's indexer was the opposite case: pure CPU, nothing
+to wait for, so only real parallelism (processes, or 3.13t) helped. Same language, different
+bottleneck.
+
+**What the per-host limits cost.** Five hosts × 2 per host caps the crawl at 10 requests in
+flight, however many workers there are. Going from per-host 2 to 4 took concurrency 20 from
+5.7 s to 4.1 s. The limit stays, at a default of 2, because the mirror stands in for someone
+else's server. A small site behind a crawler that opens 20 connections at once is under attack,
+not being crawled. The first version also had a **head-of-line blocking** bug that made the
+limit cost far more. The frontier is FIFO and its first ~100 URLs all belonged to one host, so
+all 20 workers pulled that host's URLs and parked on its semaphore while other hosts' pages
+waited behind them. Concurrency 20 was no faster than 5 (23.8 s for both, in debug mode). The
+fix: a worker whose URL's host is at its limit puts the URL back and takes the next one. That
+took the same debug-mode run to 13.8 s.
+
+**Where the loop would have blocked.** Indexing inline, via `build_index` on each page, would be
+seconds of pure CPU inside a coroutine. Every in-flight request would stall and per-host
+timing would drift. So `findex crawl` only streams JSON lines, and `findex index` runs
+afterwards. asyncio debug mode (`--debug`, `slow_callback_duration = 50 ms`) found two real
+stalls in the first version, both fixed. Building the `httpx.AsyncClient` loads the TLS trust
+store, ~0.39 s, so it now happens in `asyncio.to_thread`. The first request lazily imported
+httpx's HTTP/1.1 and anyio stack, ~0.5 s cold, which is now pre-imported in a thread. What remains
+is 1–4 steps of ~0.1 s per run, at different points each time, consistent with GC pauses and
+debug mode's own traceback-capturing overhead rather than a blocking call in the crawler.
+
+**A failure, handled (from `docs/crawl_c1_h2.log`):**
+
+```text
+23:42:39 ROBOTS http://127.0.0.1:8101/private/admin
+23:42:43 retry http://127.0.0.1:8101/book/76/10 in 0.73s (backoff) after HTTP 503 (attempt 1)
+23:42:46 retry http://127.0.0.1:8101/book/76/21 in 1.00s (Retry-After) after HTTP 429 (attempt 1)
+23:42:47 200 http://127.0.0.1:8101/book/76/21 1196ms attempts=2
+```
+
+The 429 asked for 1 s, the crawler waited exactly that instead of its own backoff, and the
+retry succeeded. The 503 had no `Retry-After`, so it got jittered exponential backoff.

@@ -234,6 +234,95 @@ def stats_cmd(
 
 
 
+@app.command("crawl")
+def crawl_cmd(
+    seeds: Annotated[list[str], typer.Argument(help="Seed URL(s).")],
+    max_pages: Annotated[int, typer.Option(min=1, help="Fetch budget.")] = 500,
+    concurrency: Annotated[int, typer.Option(min=1, help="Requests in flight, total.")] = 10,
+    per_host: Annotated[int, typer.Option(min=1, help="Requests in flight per host.")] = 2,
+    delay: Annotated[
+        float, typer.Option(min=0, help="Min seconds between requests to a host.")
+    ] = 0.0,
+    allow_domain: Annotated[
+        list[str] | None, typer.Option(help="Domains to follow (default: the seeds' domains).")
+    ] = None,
+    out_path: Annotated[Path, typer.Option("--out", help="JSON-lines output.")] = Path(
+        "data/crawl.jsonl"
+    ),
+    log_path: Annotated[Path, typer.Option("--log", help="Per-URL status log.")] = Path(
+        "crawl.log"
+    ),
+    contact: Annotated[str, typer.Option(help="Contact URL in the User-Agent.")] = (
+        "https://github.com/OWNER/REPO"
+    ),
+    debug: Annotated[bool, typer.Option(help="asyncio debug mode: report blocking calls.")] = False,
+) -> None:
+    """Crawl politely from seed URLs, streaming pages to JSON lines for `findex index`."""
+    import asyncio
+
+    from findex.crawler.crawl import CrawlStats, crawl
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    url_log = logging.getLogger("findex.crawl.urls")
+    url_log.addHandler(handler)
+    url_log.setLevel(logging.INFO)
+    url_log.propagate = False
+    retry_log = logging.getLogger("findex.crawler.fetch")
+    retry_log.addHandler(handler)
+    retry_log.setLevel(logging.INFO)
+    stats = CrawlStats()
+
+    def panel() -> Table:
+        t = Table(title="findex crawl", show_header=False)
+        t.add_row("pages", f"{stats.pages:,} / {max_pages:,} budget")
+        t.add_row("pages/s", f"{stats.pages_per_second:.1f}")
+        t.add_row("in flight", str(stats.in_flight))
+        t.add_row("queue", f"{stats.queued:,}")
+        t.add_row("errors", str(stats.errors))
+        t.add_row("retried", str(stats.retried))
+        t.add_row("robots-blocked", str(stats.robots_blocked))
+        return t
+
+    async def run() -> None:
+        from rich.live import Live
+
+        if debug:
+            asyncio.get_running_loop().slow_callback_duration = 0.05
+        with (
+            out_path.open("w", encoding="utf-8") as f,
+            Live(get_renderable=panel, console=err, refresh_per_second=4),
+        ):
+            async for page in crawl(
+                seeds,
+                max_pages=max_pages,
+                concurrency=concurrency,
+                per_host=per_host,
+                min_delay=delay,
+                allowed_domains=allow_domain,
+                contact=contact,
+                stats=stats,
+            ):
+                record = {
+                    "url": page.url,
+                    "title": page.title,
+                    "text": page.text,
+                    "fetched_at": page.fetched_at,
+                }
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    try:
+        asyncio.run(run(), debug=debug)
+    finally:
+        url_log.removeHandler(handler)
+        retry_log.removeHandler(handler)
+        handler.close()
+    err.print(
+        f"[green]✓[/] {stats.pages} pages in {stats.elapsed:.1f}s "
+        f"({stats.pages_per_second:.1f}/s), {stats.errors} errors → {out_path}; log: {log_path}"
+    )
+
 
 if __name__ == "__main__":
     app()
