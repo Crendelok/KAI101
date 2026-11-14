@@ -1,0 +1,10 @@
+# corpora never go in git
+data/
+
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
