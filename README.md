@@ -506,3 +506,98 @@ debug mode's own traceback-capturing overhead rather than a blocking call in the
 
 The 429 asked for 1 s, the crawler waited exactly that instead of its own backoff, and the
 retry succeeded. The 503 had no `Retry-After`, so it got jittered exponential backoff.
+
+## Lab 07 — search on the web
+
+> **Live URL:** _not deployed yet_. `render.yaml` and the `Dockerfile` are ready; see "Deploy" below.
+
+```bash
+findex serve --index index.fidx              # http://127.0.0.1:8000 (UI) and /docs (OpenAPI)
+findex serve --workers 4                     # four uvicorn worker processes
+INDEX_PATH=/data/index.fidx uvicorn findex.web.app:app --factory
+curl "localhost:8000/search?q=white+whale&k=5&page=2&scorer=bm25"
+docker build -t findex . && docker run --rm -p 8000:8000 findex
+```
+
+* **API (`src/findex/web/app.py`):** `GET /search?q=&k=&page=&scorer=&mode=` returns
+  `SearchResponse{query, total, page, pages, took_ms, results[{doc_id, title, score, snippet, snippet_html}]}`
+  with pagination. `GET /docs/{doc_id}` returns the document, or a 404 with `{"detail": …}`.
+  `GET /stats` reports counts, index size and uptime. `GET /health` returns `{"status":"ok"}`, or 503
+  if the index didn't load. Every parameter is validated: `q` 1–500 characters, `k` 1–50, `page`
+  1–1000, `scorer` a `Literal`. A bad value gets a 422, and a bad query syntax gets a 400 with the
+  parser's message. OpenAPI docs are at `/docs`.
+* **Structure:** a `lifespan` loads the index **once** (the mmap'd `.fidx`, in a worker thread)
+  into `app.state`. `Depends(get_index)` / `Depends(get_app_settings)` inject it, so tests swap in
+  a fixture with `app.dependency_overrides`. Config comes from the environment through
+  `pydantic-settings` (`INDEX_PATH`, `SEARCH_ASYNC`, … or a `.env` file), with nothing hard-coded.
+  Pydantic models live at the HTTP edge only; inside, findex keeps its dataclasses. A middleware
+  gives every request an id (`X-Request-ID`, generated or propagated) and logs
+  `[id] METHOD path -> status (ms)`. Unexpected exceptions are logged with that id and return a
+  clean `500 {"detail", "request_id"}`.
+* **UI:** Jinja2 templates with a search box, a BM25/TF-IDF switch, highlighted snippets, scores,
+  pagination and a document view that highlights every match. It uses one small stylesheet served
+  by `StaticFiles`, with light and dark themes. It was checked at 1280 px and at phone width (375 px,
+  no horizontal scroll).
+* **Tests (`tests/test_web.py`, 18):** search, pagination, eight different 422s, a 400 for bad
+  syntax, a 400 for semantic search when it's disabled, document 200/404/422, stats, health
+  200 → 503 when unloaded, a clean 500 with the request id, the HTML pages, the OpenAPI spec, and
+  the `async def` variant.
+* **Docker:** a multi-stage build. The uv stage installs locked dependencies; an index stage
+  downloads the public-domain corpus and builds `index.fidx`, so the image depends only on the
+  repo; the runtime is a slim, non-root (`uid 10001`) image with a `HEALTHCHECK` on `/health`.
+  **I couldn't build it on this machine because Docker isn't installed. It still needs one
+  `docker build` to verify.**
+
+### `def` or `async def` for `/search`? (20 concurrent CPU-heavy searches)
+
+The query `the OR and OR of` matches all 3,876 documents (~55 ms of CPU each). While 20 of them
+run, a probe hits `/health` every 10 ms. Each row is the median of 3 bursts.
+
+| `/search` defined as | Burst wall | Search p50 | Search max | `/health` p50 during burst | `/health` max |
+|---|---|---|---|---|---|
+| `def` (threadpool) | 1.18 s | 1088 ms | 1153 ms | **29.2 ms** | 691 ms |
+| `async def` (on the event loop) | 1.20 s | **761 ms** | 1177 ms | 45.4 ms | 535 ms |
+
+**Decision: `def`.** Both rows take the same ~1.2 s: it's 20 × 55 ms of CPU, and under the GIL no
+choice of `def` vs `async def` makes it run in parallel. The difference is *who waits*. With
+`async def`, each search runs to completion on the event loop. Searches finish one by one, so the
+median search is faster, but **every other request waits for whole searches**: `/health` p50 is
+45 ms, the length of one search. A 2-second query would freeze the entire server for 2 seconds.
+With `def`, FastAPI runs searches in its threadpool. The loop thread competes for the GIL like any
+other thread and gets a turn at every 5 ms switch interval, so cheap requests get through sooner
+(29 ms p50) and no single slow query can starve them. The `max` columns show the limit of the
+fix: 20 CPU-bound threads plus the loop share one GIL, and an unlucky request can still wait
+~0.5–0.7 s. The real fix for CPU-bound routes is more processes (the `--workers 4` row below).
+This experiment also drove two small changes: `/health` and the trivial dependencies became
+`async def`. A sync dependency costs a threadpool hop, and a liveness probe shouldn't queue behind
+CPU work.
+
+### Load test (`oha`, 10 s, `/search?q="white whale" OR captain`)
+
+| Target | Route | Concurrency | RPS | p50 (ms) | p95 | p99 |
+|---|---|---|---|---|---|---|
+| local, 1 worker, `async def` | `/search` | 50 | 37 | 1304 | 3623 | 6413 |
+| local, 1 worker, `def` | `/search` | 50 | 38 | 1372 | 2301 | 3526 |
+| local, 4 workers, `def` | `/search` | 50 | **86** | **485** | **930** | **1158** |
+| deployed | `/search` | 20 | — | — | — | — |
+
+**Connecting the rows to Labs 5–6.** One process serves ~37 requests/s however the route is
+declared: that's one GIL's worth of BM25 (~26 ms per request). `async def` vs `def` changes only
+the *ordering*. With `async def` the loop can't even accept new connections while a search
+runs. Our reading of the long p99 tail (6.4 s) is that unlucky requests keep losing that race.
+With `def` the threadpool time-slices requests, which cut p99 to 3.5 s at the same throughput. This is Lab 6's lesson in
+reverse: async helps when you *wait*, not when you *compute*. Four worker processes means four
+interpreters and four GILs, Lab 5's processes, which give 2.3× the throughput and a 3× lower p99.
+It's not 4×: the same 6-core machine was also running `oha` at concurrency 50, and each worker
+process decodes and caches its own copy of every posting list it touches.
+
+### Deploy (Render)
+
+1. Push the repo to GitHub.
+2. In Render: **New → Blueprint**, then pick the repo. `render.yaml` defines a Docker web service
+   with `healthCheckPath: /health`.
+3. The first build downloads the corpus and builds the index inside the image, which takes a few
+   minutes.
+4. Put the URL at the top of this README, then run
+   `python scripts/bench_lab07.py load --url https://<app>.onrender.com --concurrency 20` for the
+   "deployed" row.

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block page_title %}{% if q %}{{ q }} — {% endif %}{{ title }}{% endblock %}
+{% block content %}
+<form class="search" action="/" method="get" role="search">
+  <input type="search" name="q" value="{{ q }}" placeholder='whale OR ship, "white whale", NOT …'
+         aria-label="Search" autofocus>
+  <button type="submit">Search</button>
+  <div class="options">
+    <label>ranking
+      <select name="scorer">
+        <option value="bm25" {% if scorer == "bm25" %}selected{% endif %}>BM25</option>
+        <option value="tfidf" {% if scorer == "tfidf" %}selected{% endif %}>TF-IDF</option>
+      </select>
+    </label>
+    {% if semantic %}
+    <span class="modes" role="radiogroup" aria-label="mode">
+      {% for m in ["keyword", "semantic", "hybrid"] %}
+      <label><input type="radio" name="mode" value="{{ m }}" {% if mode == m %}checked{% endif %}> {{ m }}</label>
+      {% endfor %}
+    </span>
+    {% endif %}
+  </div>
+</form>
+
+{% if index is none %}
+  <p class="notice">The index isn't loaded. Check <code>INDEX_PATH</code> and <a href="/health">/health</a>.</p>
+{% elif error %}
+  <p class="notice">{{ error }}</p>
+{% elif res %}
+  <p class="meta">{{ "{:,}".format(res.total) }} matching documents · page {{ res.page }} of {{ res.pages }} · {{ res.took_ms }} ms</p>
+  <ol class="results" start="{{ (res.page - 1) * res.k + 1 }}">
+    {% for hit in res.results %}
+    <li>
+      <a class="title" href="/doc/{{ hit.doc_id }}?q={{ q | urlencode }}">{{ hit.title }}</a>
+      <span class="score">{{ "%.2f" | format(hit.score) }}</span>
+      <p class="snippet">{{ hit.snippet_html | safe }}</p>
+    </li>
+    {% else %}
+    <li class="empty">No results. Try fewer words, or <code>OR</code> between them.</li>
+    {% endfor %}
+  </ol>
+  {% if res.pages > 1 %}
+  <nav class="pager">
+    {% set base = "/?q=" ~ (q | urlencode) ~ "&scorer=" ~ scorer ~ "&mode=" ~ mode %}
+    {% if res.page > 1 %}<a href="{{ base }}&page={{ res.page - 1 }}">← previous</a>{% endif %}
+    {% for p in range([1, res.page - 3] | max, ([res.pages, res.page + 3] | min) + 1) %}
+      {% if p == res.page %}<strong>{{ p }}</strong>{% else %}<a href="{{ base }}&page={{ p }}">{{ p }}</a>{% endif %}
+    {% endfor %}
+    {% if res.page < res.pages %}<a href="{{ base }}&page={{ res.page + 1 }}">next →</a>{% endif %}
+  </nav>
+  {% endif %}
+{% else %}
+  <section class="intro">
+    <p>Search {{ "{:,}".format(index.num_docs) }} documents. Words are ANDed; use
+      <code>OR</code>, <code>NOT</code>, <code>( )</code> and <code>"quoted phrases"</code>.</p>
+    <p class="examples">Try:
+      <a href='/?q=%22white+whale%22'>"white whale"</a> ·
+      <a href="/?q=vampire+OR+garlic">vampire OR garlic</a> ·
+      <a href="/?q=treasure+island+NOT+pirates">treasure island NOT pirates</a></p>
+  </section>
+{% endif %}
+{% endblock %}

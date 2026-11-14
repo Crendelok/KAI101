@@ -1,0 +1,75 @@
+:root {
+  --bg: #fbfaf7;
+  --fg: #1d1d1b;
+  --muted: #6b6a66;
+  --line: #e4e1da;
+  --accent: #2b5fd9;
+  --mark: #ffe58a;
+  --card: #ffffff;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #151515;
+    --fg: #e9e7e2;
+    --muted: #9b9890;
+    --line: #2c2b29;
+    --accent: #8fb0ff;
+    --mark: #6b5a12;
+    --card: #1c1c1b;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code { font: 0.9em ui-monospace, "Cascadia Code", monospace; }
+mark { background: var(--mark); color: inherit; padding: 0 1px; border-radius: 2px; }
+
+.top {
+  display: flex; justify-content: space-between; align-items: baseline;
+  max-width: 820px; margin: 0 auto; padding: 18px 16px 0;
+}
+.brand { font-weight: 700; font-size: 1.3rem; letter-spacing: -0.02em; color: var(--fg); }
+.top nav { color: var(--muted); font-size: 0.9rem; }
+main { max-width: 820px; margin: 0 auto; padding: 12px 16px 48px; }
+footer { max-width: 820px; margin: 0 auto; padding: 16px; color: var(--muted); font-size: 0.85rem;
+         border-top: 1px solid var(--line); }
+
+.search { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 18px; }
+.search input[type=search] {
+  flex: 1 1 320px; min-width: 0; padding: 11px 14px; font-size: 1.05rem;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg);
+}
+.search input[type=search]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search button {
+  min-height: 44px; padding: 0 20px; border: 0; border-radius: 10px; background: var(--accent);
+  color: #fff; font-size: 1rem; cursor: pointer;
+}
+.options { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 18px; color: var(--muted);
+           font-size: 0.9rem; }
+.options select { margin-left: 6px; background: var(--card); color: var(--fg);
+                  border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; }
+.modes label { margin-right: 10px; }
+
+.meta { color: var(--muted); font-size: 0.88rem; margin: 4px 0 10px; }
+.notice { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.results { list-style: none; padding: 0; margin: 0; counter-reset: none; }
+.results li { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.results .title { font-size: 1.08rem; font-weight: 600; }
+.results .score { float: right; color: var(--muted); font: 0.8rem ui-monospace, monospace; }
+.results .snippet { margin: 4px 0 0; color: var(--fg); overflow-wrap: anywhere; }
+.results .empty { color: var(--muted); }
+.pager { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin-top: 20px; }
+.intro { color: var(--muted); }
+.examples a { white-space: nowrap; }
+
+.back { margin: 6px 0 0; font-size: 0.9rem; }
+.doc h1 { font-size: 1.6rem; line-height: 1.25; margin: 10px 0 4px; letter-spacing: -0.01em; }
+.doc .body { white-space: pre-wrap; font: 17px/1.65 Georgia, "Iowan Old Style", serif;
+             overflow-wrap: anywhere; }

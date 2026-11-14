@@ -233,6 +233,36 @@ def stats_cmd(
     out.print(terms)
 
 
+@app.command("serve")
+def serve_cmd(
+    index_path: Annotated[
+        Path, typer.Option("--index", envvar="INDEX_PATH", help="Index file to serve.")
+    ] = Path("index.fidx"),
+    host: Annotated[str, typer.Option(envvar="HOST")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(envvar="PORT")] = 8000,
+    workers: Annotated[int, typer.Option(min=1, envvar="WEB_CONCURRENCY")] = 1,
+    search_async: Annotated[
+        bool, typer.Option(help="Register /search as `async def` (Lab 7 experiment).")
+    ] = False,
+) -> None:
+    """Serve the search API and web UI with uvicorn."""
+    import uvicorn
+
+    if not index_path.exists():
+        raise _fail(f"index file not found: {index_path}")
+    # Settings come from the environment, so every uvicorn worker process sees the same config.
+    os.environ["INDEX_PATH"] = str(index_path.resolve())
+    os.environ["SEARCH_ASYNC"] = "1" if search_async else "0"
+    level = logging.getLogger().getEffectiveLevel()
+    uvicorn.run(
+        "findex.web.app:app",
+        factory=True,
+        host=host,
+        port=port,
+        workers=workers,
+        log_level=logging.getLevelName(level).lower(),
+    )
+
 
 @app.command("crawl")
 def crawl_cmd(

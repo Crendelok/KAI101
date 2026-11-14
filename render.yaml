@@ -1,0 +1,11 @@
+# Render Blueprint: Dashboard → New → Blueprint → pick this repo.
+# The Docker build downloads the public-domain corpus and builds the index itself.
+services:
+  - type: web
+    name: findex
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: WEB_CONCURRENCY
+        value: "1"

@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block page_title %}{{ doc_title }} — {{ title }}{% endblock %}
+{% block content %}
+<p class="back">{% if q %}<a href="/?q={{ q | urlencode }}">← results for “{{ q }}”</a>{% else %}<a href="/">← search</a>{% endif %}</p>
+<article class="doc">
+  <h1>{{ doc_title }}</h1>
+  <p class="meta">document {{ meta.doc_id }} · {{ "{:,}".format(length) }} tokens · <code>{{ meta.path }}</code></p>
+  <div class="body">{{ body | safe }}</div>
+</article>
+{% endblock %}
