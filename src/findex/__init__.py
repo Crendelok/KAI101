@@ -1,6 +1,8 @@
 """findex — a search engine built one lab at a time."""
 
-from findex.corpus import Document, iter_documents
-from findex.tokenize import tokenize
+__version__ = "0.4.0"
 
-__all__ = ["Document", "iter_documents", "tokenize"]
+from findex.corpus import Document, iter_documents  # noqa: E402
+from findex.tokenize import tokenize  # noqa: E402
+
+__all__ = ["Document", "__version__", "iter_documents", "tokenize"]

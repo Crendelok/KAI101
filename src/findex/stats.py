@@ -9,6 +9,7 @@ python -m findex.stats data/ --compare        # both, as a README table
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import sys
 import time
@@ -119,8 +120,10 @@ def main(argv: list[str] | None = None) -> int:
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     # Windows consoles default to a legacy code page; the top terms may be Cyrillic.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    stdout: object = sys.stdout
+    if isinstance(stdout, io.TextIOWrapper):
+        # The buffer type parameter is unknowable here; reconfigure doesn't depend on it.
+        stdout.reconfigure(encoding="utf-8", errors="replace")  # pyright: ignore[reportUnknownMemberType]
 
     if args.compare:
         eager = measure(eager_stats, args.root, args.limit)

@@ -52,7 +52,7 @@ def _kind(path: Path) -> tuple[str, str] | None:
     return None
 
 
-def _open_binary(path: Path, compression: str) -> IO[bytes]:
+def _open_binary(path: Path, compression: str) -> IO[bytes] | gzip.GzipFile | bz2.BZ2File:
     if compression == ".gz":
         return gzip.open(path, "rb")
     if compression == ".bz2":

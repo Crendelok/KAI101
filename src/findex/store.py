@@ -27,7 +27,7 @@ import pickle
 import struct
 import sys
 from array import array
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal, cast, overload, override
@@ -71,8 +71,8 @@ def load_pickle(path: Path) -> Index:
 # --- .fidx ------------------------------------------------------------------------
 
 
-def _as_native(buf: memoryview | bytes, typecode: str) -> array[int]:
-    a = array(typecode)
+def _as_native(buf: memoryview | bytes, typecode: Literal["I", "Q"]) -> array[int]:
+    a: array[int] = array(typecode)
     a.frombytes(buf)
     if sys.byteorder != "little":
         a.byteswap()
@@ -201,7 +201,9 @@ def load_fidx(path: Path, *, lazy: bool = False) -> Index:
             mm = None
             buf = memoryview(f.read())
     tail = len(MAGIC) + U64.size
-    if buf[: len(MAGIC)] != MAGIC or buf[-len(MAGIC) :] != MAGIC:
+    if len(buf) < 2 * len(MAGIC) + U64.size or (
+        bytes(buf[: len(MAGIC)]) != MAGIC or bytes(buf[-len(MAGIC) :]) != MAGIC
+    ):
         raise ValueError(f"{path} is not a findex .fidx file")
     (hlen,) = U64.unpack(buf[-tail : -len(MAGIC)])
     header = cast(dict[str, Any], json.loads(bytes(buf[-tail - hlen : -tail])))
@@ -261,7 +263,7 @@ def load(path: Path | str, fmt: Format | None = None, *, lazy: bool = False) -> 
 
 
 @contextmanager
-def open_index(path: Path | str, *, lazy: bool = True) -> Iterator[Index]:
+def open_index(path: Path | str, *, lazy: bool = True) -> Generator[Index]:
     """``with open_index("index.fidx") as ix: ...`` — the mmap is closed on exit,
     including when the body raises."""
     index = load(path, lazy=lazy)

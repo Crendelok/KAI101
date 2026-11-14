@@ -237,3 +237,58 @@ little, so a fourth Holmes story takes that place. Saturation also explains BM25
 *pirates treasure island map*, Treasure Island's sections no longer get much credit for saying
 "island" and "treasure" over and over, so an *Odyssey* section about islands reaches #2. Sections
 are all about 1,500 words, so length normalization barely matters here.
+
+## Lab 04 — a real tool: typed, tested, packaged
+
+<!-- After pushing to GitHub, replace OWNER/REPO: -->
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
+```bash
+uv tool install .                     # puts `findex` on PATH
+findex index data/sections --out index.fidx
+findex search index.fidx '"white whale" captain' -k 5
+findex search index.fidx 'whale OR ship' --json | jq .title
+findex stats index.fidx
+findex -vv search index.fidx 'whale'  # timing + cache logs on stderr
+```
+
+From a release wheel, on any machine with `uv`:
+
+```bash
+uv build                                              # dist/findex-0.4.0-py3-none-any.whl
+uvx --from ./dist/findex-0.4.0-py3-none-any.whl findex --help
+uv tool install https://github.com/OWNER/REPO/releases/download/v0.4.0/findex-0.4.0-py3-none-any.whl
+```
+
+* **Typing:** `pyright` in strict mode, 0 errors. `Scorer` is a `typing.Protocol`. Generators are
+  typed `Iterator[...]` and accept `Iterable[...]`; `Literal` is used for the engine, executor and
+  scorer names; `@timed` uses PEP 695 generics (`def timed[**P, R]`) so decorated functions keep
+  their signatures. Each of the four `# pyright: ignore` comments has its reason next to it
+  (untyped JSON values, and a typeshed generic on `TextIOWrapper`).
+* **Tests:** 80 pytest tests. A session-scoped fixture corpus lives in `conftest.py`. The tokenizer
+  tests are parametrized and include Unicode. The query parser is tested by tree equality, the
+  three Lab 3 ranking checks run as tests, save/load round-trips through both formats and the mmap,
+  and the CLI runs through `typer.testing.CliRunner`. **Five Hypothesis properties:** merge equals
+  set algebra; tokens are never empty and never contain whitespace; the tokenizer is
+  case-insensitive and stable on ASCII text; any query tree survives `parse(str(tree))`; and any
+  small corpus keeps its index invariants and survives a save/load round trip.
+* **Coverage: 81%** of the package (branch coverage). What isn't covered, and why: the
+  `python -m findex.index/search` argparse mains, which are thin Lab 2 entry points now superseded
+  by the CLI; the decode-error and unreadable-archive branches in `corpus.py`; and `parallel.py`,
+  which is Lab 5's code arriving early. Excluding `parallel.py`, statement coverage is 89%.
+* **CLI:** a `typer` app with `index` (a `rich` progress bar on stderr), `search` (a `rich` table
+  with highlighted snippets, or `--json` lines on stdout) and `stats`. `-v`/`-vv` set the log level.
+  Logging is configured once in `cli.py` and every diagnostic goes to stderr. Expected failures print
+  one line and exit nonzero: a missing file exits 1, a bad query exits 2.
+* **Packaging:** PEP 621 `pyproject.toml`, the version read from `findex/__init__.py`, a `dev`
+  dependency group, `[project.scripts] findex = "findex.cli:app"`, `py.typed`, and a committed
+  `uv.lock`. `uv build` produces the wheel above. It was verified in a clean, isolated environment
+  with `uvx --from dist/…whl findex --help`.
+* **CI:** `.github/workflows/ci.yml` runs ruff, `ruff format --check`, pyright and pytest with
+  coverage on Python 3.12 and 3.13, then builds the wheel. Pushing a `v*` tag attaches the wheel to
+  a GitHub Release.
+
+> **Windows note:** if the project lives under a very long path, files deep inside `.venv` can
+> exceed the 260-character `MAX_PATH` limit and fail to import. The symptom is
+> `ImportError … (unknown location)`. Point uv at a shorter venv path with
+> `UV_PROJECT_ENVIRONMENT=C:\venvs\findex`, or enable long paths in Windows.

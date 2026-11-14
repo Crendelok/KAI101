@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import tracemalloc
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -28,7 +28,7 @@ class Measurement:
 
 
 @contextmanager
-def measured(label: str, *, trace_memory: bool = True) -> Iterator[Measurement]:
+def measured(label: str, *, trace_memory: bool = True) -> Generator[Measurement]:
     m = Measurement(label)
     was_tracing = tracemalloc.is_tracing()
     if trace_memory and not was_tracing:
