@@ -288,7 +288,125 @@ uv tool install https://github.com/OWNER/REPO/releases/download/v0.4.0/findex-0.
   coverage on Python 3.12 and 3.13, then builds the wheel. Pushing a `v*` tag attaches the wheel to
   a GitHub Release.
 
-> **Windows note:** if the project lives under a very long path, files deep inside `.venv` can
+> **Windows note (long paths):** if the project lives under a very long path, files deep inside `.venv` can
 > exceed the 260-character `MAX_PATH` limit and fail to import. The symptom is
 > `ImportError … (unknown location)`. Point uv at a shorter venv path with
 > `UV_PROJECT_ENVIRONMENT=C:\venvs\findex`, or enable long paths in Windows.
+
+## Lab 05 — parallel indexing and the GIL
+
+```bash
+findex index data/sections --executor processes --workers 8   # the default
+findex index data/sections --executor threads --workers 8
+uv run python scripts/bench_lab05.py cpu --runs 3              # every config in a fresh process
+uv python install 3.13t
+uv run python scripts/bench_lab05.py cpu --python "$(uv python find 3.13t)" --label free-threaded --executors threads
+uv run python scripts/bench_lab05.py report                    # table + docs/lab05_speedup.png
+```
+
+`parallel.py` splits the sorted path list into contiguous chunks (4 per worker, for load
+balancing) and calls `build_partial(paths) -> PartialIndex` on each. Workers get **paths, not
+documents**: a path is ~100 bytes to pickle, a document is ~10 KB. Each partial numbers its
+documents from 0. `merge()` concatenates partials in chunk order and shifts each chunk's ids
+by the number of documents before it. That makes the parallel index **byte-identical** to the
+single-pass build, for serial, threads and processes alike (`tests/test_parallel.py` compares
+the saved `.fidx` bytes). `build_partial` is a module-level function that takes only arguments,
+so it pickles by reference. The pool is created only inside the CLI command (spawn-safe). A
+worker exception re-raises in the parent with the worker's traceback chained, and pending
+chunks are cancelled.
+
+**Machine:** AMD Ryzen 5 3600 (6 cores / 12 threads), 16 GB RAM, Windows 11, CPython 3.12.10 and
+3.13.18 free-threaded. The corpus is 3,876 documents (32 MB) indexed with positions and stored
+texts. Each configuration ran 3 times in a fresh process and the table shows the median. CPU
+is parent CPU plus every worker process's CPU. Peak RSS is the parent's peak working set.
+
+| Executor | Python | Workers | Wall (s, median) | CPU (s) | Peak RSS (parent) | Merge (s) | Speedup |
+|---|---|---|---|---|---|---|---|
+| serial | 3.12 | 1 | 16.13 | 15.7 | 193 MiB | 0.36 | 1.00× |
+| threads | 3.12 | 1 | 16.24 | 16.0 | 224 MiB | 0.60 | 0.99× |
+| threads | 3.12 | 2 | 17.80 | 18.3 | 249 MiB | 0.82 | 0.91× |
+| threads | 3.12 | 4 | 18.15 | 19.3 | 281 MiB | 0.98 | 0.89× |
+| threads | 3.12 | 8 | 17.59 | 19.0 | 326 MiB | 0.92 | 0.92× |
+| threads | 3.12 | 12 | 17.96 | 20.0 | 356 MiB | 1.25 | 0.90× |
+| processes | 3.12 | 1 | 21.08 | 19.6 | 229 MiB | 1.17 | 0.76× |
+| processes | 3.12 | 2 | 11.60 | 21.1 | 255 MiB | 1.26 | 1.39× |
+| processes | 3.12 | 4 | 7.04 | 22.6 | 286 MiB | 1.29 | 2.29× |
+| **processes** | 3.12 | **8** | **5.65** | 28.6 | 332 MiB | 1.33 | **2.85×** |
+| processes | 3.12 | 12 | 6.65 | 34.2 | 363 MiB | 1.73 | 2.43× |
+| threads | 3.13t (no GIL) | 1 | 20.90 | 19.4 | 235 MiB | 0.77 | 0.77× |
+| threads | 3.13t (no GIL) | 2 | 11.92 | 21.6 | 263 MiB | 0.82 | 1.35× |
+| threads | 3.13t (no GIL) | 4 | 7.17 | 23.7 | 301 MiB | 0.97 | 2.25× |
+| threads | 3.13t (no GIL) | 8 | 5.64 | 29.6 | 363 MiB | 1.17 | 2.86× |
+| threads | 3.13t (no GIL) | 12 | 5.48 | 31.2 | 397 MiB | 1.36 | 2.94× |
+
+![speedup vs workers](docs/lab05_speedup.png)
+
+**I/O-bound counter-benchmark** (`bench_lab05.py io`): 50 requests to a local server that waits
+100 ms per response, using a `ThreadPoolExecutor` on the normal GIL build:
+
+| Threads | Wall (s) | Speedup |
+|---|---|---|
+| 1 | 5.15 | 1.0× |
+| 2 | 2.55 | 2.0× |
+| 4 | 1.37 | 3.8× |
+| 8 | 0.72 | 7.2× |
+| 16 | 0.62 | 8.4× |
+| 50 | 1.14 | 4.5× |
+
+### What happened, and why
+
+**Threads didn't scale under the GIL.** Indexing is pure-Python CPU work: regex matching,
+`Counter` updates, dict inserts. Only the thread holding the GIL can execute Python bytecode, so
+eight threads take turns on one core. Each switch (forced every 5 ms) costs a context switch
+and cache misses. That's why wall time *rises* slightly (0.9×) while total CPU grows from 15.7 s
+to 19–20 s: extra work, no extra parallelism. The I/O benchmark is the same thread pool on the
+same interpreter, but there threads scale almost linearly up to 8, because a thread waiting on a
+socket releases the GIL. Waiting is the one thing threads can do in parallel under the GIL. (At
+50 threads the toy server, which runs in the same process, becomes the bottleneck.)
+
+**Processes scaled, and you can see the cost.** Each process has its own interpreter and its own
+GIL. At 8 workers wall time drops from 16.1 s to 5.65 s (2.85×), but CPU rises from 15.7 s to
+28.6 s. The extra ~13 CPU-seconds are the **pickling tax**: eight interpreters start up and
+re-import findex (spawn), every partial index (postings, positions, compressed texts) is pickled
+in the worker, sent through a pipe, and unpickled in the parent, and two hyperthreads sharing a
+physical core each run slower than one alone. The process ×1 row isolates that overhead: the
+same work as serial plus one round of pickling costs 21 s instead of 16 s. Parent RSS grows with
+workers because the parent holds every unpickled partial plus the merged index at once. 12
+workers is slower than 8: the CPU has only 6 physical cores, and more chunks make a bigger merge.
+
+**Amdahl's law is visible in the merge column.** The merge runs serially in the parent, and it
+gets *slower* as there are more partials. Each term's postings are touched once per chunk, and
+every doc id is shifted in a Python loop: 1.33 s at 8 workers, versus 0.36 s for the serial
+build's trivial one-chunk merge. Add the parent's work receiving and unpickling results, and
+roughly 2 s of the 5.65 s is serial. With a serial fraction of ~12%, the speedup on 6 real cores
+can't exceed 1 / (0.12 + 0.88/6) ≈ 3.7×. 2.85× is what's left after the pickling tax. Infinite
+cores would cap out at 1/0.12 ≈ 8×.
+
+**Free-threaded 3.13t** removes the GIL, and the *threaded* build now scales just like processes
+(2.86× at 8, 2.94× at 12) with no pickling, because results stay in shared memory. It costs
+~30% in single-thread speed: 20.9 s vs 16.1 s for one thread, from the free-threaded build's
+per-object locking and reference counting, plus 3.13 disabling some of its specializations.
+It also used more memory. At 12 threads it is the fastest configuration overall.
+
+**Did free-threading expose a race? Not in findex, by design.** Every worker builds its own
+`PartialIndex`. Nothing mutable is shared until the single-threaded merge, so there is nothing
+to race on, and the byte-identical test passes on both builds. `scripts/race_demo.py` shows what
+a shared-state design would have hit. Eight threads each doing `counter[term] += 1` 200,000
+times into **one shared `Counter`**:
+
+| Build | Result | Lost updates |
+|---|---|---|
+| 3.12 (GIL) | 1,600,000 of 1,600,000 | 0 (this run) |
+| 3.13t (no GIL) | 814,371 of 1,600,000 | **785,629 (49%)** |
+| either, with a `Lock` | 1,600,000 | 0 |
+| either, private `Counter` per thread merged at the end | 1,600,000 | 0 |
+
+`counter[k] += 1` compiles to `BINARY_SUBSCR`, `BINARY_OP +=`, `STORE_SUBSCR`: a separate
+load, add and store. Two threads can both load 41 and both store 42. With the GIL, a switch
+between those bytecodes is merely *unlikely* (3.12 checks for switches at only a few points), so
+the code passes and is still wrong. Without the GIL the threads really run at the same time,
+and half the updates vanish. The fix is either a `Lock` or, better, findex's approach: give each
+thread its own state and merge.
+
+**Default:** `--executor processes --workers min(8, cpu_count)`. It wins on the standard GIL
+build. On a free-threaded interpreter, `--executor threads` is equally fast and lighter.

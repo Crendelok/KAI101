@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from collections import Counter
 from collections.abc import Iterator
@@ -44,6 +45,12 @@ app = typer.Typer(
 class ScorerChoice(StrEnum):
     bm25 = "bm25"
     tfidf = "tfidf"
+
+
+class ExecutorChoice(StrEnum):
+    serial = "serial"
+    threads = "threads"
+    processes = "processes"
 
 
 def _configure_logging(verbosity: int) -> None:
@@ -98,8 +105,15 @@ def index_cmd(
     ),
     positions: Annotated[bool, typer.Option(help="Record positions (phrase queries).")] = True,
     limit: Annotated[int | None, typer.Option(help="Only index the first N documents.")] = None,
+    executor: Annotated[
+        ExecutorChoice, typer.Option(help="How to parallelize the build.")
+    ] = ExecutorChoice.processes,
+    workers: Annotated[
+        int, typer.Option(min=1, help="Worker threads/processes (default: min(8, CPU count)).")
+    ] = min(8, os.cpu_count() or 1),
 ) -> None:
     """Build an index from a corpus and save it."""
+    from findex.parallel import build_parallel
     from findex.store import save
 
     if not corpus.exists():
@@ -110,6 +124,28 @@ def index_cmd(
     total = limit if limit is not None else None
     if total is None and all(p.suffix == ".txt" for p in paths):
         total = len(paths)
+    if executor is not ExecutorChoice.serial:
+        with Progress(
+            TextColumn(f"[bold]indexing ({executor.value} × {workers})"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=err,
+            transient=True,
+        ) as progress:
+            task = progress.add_task("docs", total=total)
+            index, report = build_parallel(
+                corpus,
+                workers=workers,
+                executor=executor.value,
+                positions=positions,
+                limit=limit,
+                on_chunk=lambda n: progress.advance(task, n),
+            )
+        log.info("build %.2fs + merge %.2fs, cpu %.1fs", report.build, report.merge, report.cpu)
+        save(index, out_path)
+        err.print(f"[green]✓[/] {index!r} → {out_path} ({out_path.stat().st_size / 2**20:.1f} MiB)")
+        return
     with Progress(
         TextColumn("[bold]indexing"),
         BarColumn(),
@@ -195,6 +231,8 @@ def stats_cmd(
     for term, n in cf.most_common(top):
         terms.add_row(term, f"{n:,}", f"{index.df(term):,}")
     out.print(terms)
+
+
 
 
 if __name__ == "__main__":
