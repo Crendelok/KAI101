@@ -1,0 +1,25 @@
+# findex index data/sections (serial, positions)
+# sorted by tottime (time spent in the function itself)
+         35285176 function calls (35285165 primitive calls) in 27.549 seconds
+
+   Ordered by: internal time
+   List reduced from 151 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+  5908714    6.294    0.000   12.189    0.000 tokenize.py:39(tokenize)
+        1    5.218    5.218   27.548   27.548 index.py:214(build_index)
+  5904838    4.158    0.000    4.158    0.000 {method 'translate' of 'str' objects}
+  2251066    2.196    0.000    4.105    0.000 index.py:63(append)
+     3876    2.087    0.001    2.087    0.001 {method 'read' of '_io.BufferedReader' objects}
+  5904838    1.393    0.000    1.393    0.000 {method 'group' of 're.Match' objects}
+     3876    1.124    0.000    1.124    0.000 {built-in method zlib.compress}
+  5920360    1.072    0.000    1.072    0.000 {method 'append' of 'list' objects}
+  4506008    0.972    0.000    0.972    0.000 {method 'append' of 'array.array' objects}
+  2251066    0.938    0.000    0.938    0.000 {method 'extend' of 'array.array' objects}
+     3876    0.463    0.000    0.469    0.000 {built-in method _io.open}
+2254971/2254968    0.298    0.000    0.298    0.000 {built-in method builtins.len}
+     3881    0.248    0.000    0.251    0.000 {built-in method nt.stat}
+     3876    0.219    0.000    0.219    0.000 {method 'casefold' of 'str' objects}
+    76766    0.189    0.000    0.189    0.000 index.py:52(__init__)
+
+

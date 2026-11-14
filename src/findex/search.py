@@ -20,7 +20,7 @@ from findex.index import Index, Posting
 from findex.query import parse
 from findex.scoring import BM25, Scorer
 from findex.setops import Engine, difference, intersect, union
-from findex.snippets import Snippet, make_snippet
+from findex.snippets import RADIUS, Snippet, make_snippet
 from findex.timing import timed
 from findex.tokenize import tokenize
 
@@ -80,10 +80,18 @@ class ResultList(Sequence[SearchResult]):
     Slicing returns another ResultList, so ``results[:5]`` keeps ``total``.
     """
 
-    def __init__(self, hits: Sequence[SearchResult], total: int, terms: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        hits: Sequence[SearchResult],
+        total: int,
+        terms: tuple[str, ...],
+        anchors: dict[int, int] | None = None,
+    ) -> None:
         self._hits = list(hits)
         self.total = total
         self.terms = terms
+        # doc id -> char offset of the passage that matched (semantic search's best chunk)
+        self.anchors: dict[int, int] = anchors or {}
 
     @overload
     def __getitem__(self, i: int) -> SearchResult: ...
@@ -92,7 +100,7 @@ class ResultList(Sequence[SearchResult]):
     @override
     def __getitem__(self, i: int | slice) -> SearchResult | ResultList:
         if isinstance(i, slice):
-            return ResultList(self._hits[i], self.total, self.terms)
+            return ResultList(self._hits[i], self.total, self.terms, self.anchors)
         return self._hits[i]
 
     @override
@@ -157,9 +165,19 @@ def search(
     return ResultList(hits, len(ids), terms)
 
 
-def snippet_for(index: Index, doc_id: int, terms: Sequence[str]) -> Snippet:
+def snippet_for(index: Index, doc_id: int, terms: Sequence[str], at: int | None = None) -> Snippet:
+    """Snippet around the best term match — or, given `at` (a semantic hit's best chunk),
+    from that passage, highlighting any query terms inside it."""
     text = index.text(doc_id)
-    return make_snippet(text, terms) if text else Snippet("")
+    if not text:
+        return Snippet("")
+    if at is None:
+        return make_snippet(text, terms)
+    passage = text[at : at + 4 * RADIUS]
+    snip = make_snippet(passage, terms)
+    if not snip.spans:
+        snip = make_snippet(passage, ())
+    return snip.with_leading_ellipsis(at > 0 and not snip.text.startswith("…"))
 
 
 def main(argv: list[str] | None = None) -> int:

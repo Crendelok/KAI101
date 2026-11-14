@@ -16,3 +16,4 @@ dist/
 .coverage
 .hypothesis/
 
+*.emb.json

@@ -1,9 +1,106 @@
 # findex
 
-A full-text search engine built from scratch, one lab at a time.
-**Lab 01:** a corpus loader and tokenizer that stream the corpus instead of loading it.
+**A full-text search engine built from scratch in Python**: streaming corpus intake, an inverted
+index with positions, BM25 ranking with a boolean/phrase query language, parallel indexing, a
+polite async crawler, a FastAPI service with a web UI, NumPy-vectorized scoring, and optional
+semantic + hybrid search. Built over the eight labs of
+[Python — Build a Search Engine](https://github.com/rmalkevy/Programming-Practice-Projects/tree/main/courses/python).
 
-## Corpus
+> **Live demo:** _add the Render URL here after deploying_ (see [Deploy](#deploy-render)) ·
+> **Demo GIF / video:** _record and add here_ ·
+> [![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+
+### Headline numbers (40 Gutenberg books, 3,876 sections, 5.9 M tokens; Ryzen 5 3600)
+
+| | |
+|---|---|
+| Streaming vs loading the corpus (Lab 1) | **55 MiB** peak instead of 406 MiB |
+| Postings as `array('I')` vs objects (Lab 2) | **43 MiB** build peak instead of 204 MiB; loads 9× faster |
+| Parallel indexing, 8 processes (Lab 5) | **2.85×**; threads under the GIL: 0.9×; threads on free-threaded 3.13t: 2.9× |
+| Async crawler, concurrency 20 vs 1 (Lab 6) | **6.7×** more pages/s in one thread, 49 MiB |
+| 4 uvicorn workers vs 1 (Lab 7) | **2.3×** throughput, p99 3.5 s → 1.2 s |
+| NumPy BM25 vs per-posting Python (Lab 8) | **51×** on a common term, identical rankings |
+| precision@5, hybrid vs keyword (Lab 8) | keyword 0.90 on known-word queries; on paraphrases semantic **0.32** / hybrid 0.24 vs keyword 0.12 |
+
+### Architecture
+
+```mermaid
+flowchart LR
+    subgraph intake [Corpus intake]
+        G[Gutenberg books<br/>scripts/fetch_gutenberg.py] --> S[~1,500-word sections<br/>data/sections/*.txt]
+        W[Local mirror / any site] -->|findex crawl<br/>asyncio + httpx| J[data/crawl.jsonl]
+    end
+    S --> C[corpus.py<br/>iter_documents — generator]
+    J --> C
+    C --> T[tokenize.py<br/>NFC → casefold → finditer]
+    T --> P[parallel.py<br/>build_partial × N processes → merge]
+    P --> I[(index.fidx<br/>uint32 postings + positions<br/>zlib texts, JSON header)]
+    I -->|mmap, lazy| X[Index — Mapping&lt;term, PostingList&gt;]
+    X --> Q[query.py<br/>recursive-descent parser → AND/OR/NOT/Phrase tree]
+    Q --> R[fast.py<br/>NumPy BM25 / TF-IDF + argpartition]
+    I -.->|findex embed| E[(index.emb.npy<br/>MiniLM chunk vectors)]
+    E --> H[semantic.py<br/>E @ q, best chunk/doc, RRF hybrid]
+    R --> H
+    R --> CLI[findex CLI<br/>typer + rich]
+    H --> API[FastAPI<br/>/search /docs /stats /health + Jinja UI]
+```
+
+### Quickstart
+
+```bash
+uv sync                                     # Python 3.12+; add --extra semantic for embeddings
+uv run python scripts/fetch_gutenberg.py    # 40 public-domain books -> data/gutenberg/
+uv run python scripts/make_sections.py      # -> data/sections/ (3,876 documents)
+uv run findex index data/sections --out index.fidx
+uv run findex search index.fidx '"white whale" captain'
+uv run findex serve                         # http://127.0.0.1:8000
+uv run findex embed index.fidx              # optional: semantic + hybrid modes
+uv run findex search index.fidx "a sailor obsessed with a giant sea creature" --mode hybrid
+```
+
+### Layout
+
+| Path | What |
+|---|---|
+| `src/findex/corpus.py`, `tokenize.py` | lazy document stream; NFC → casefold → `re.finditer` tokenizer (Lab 1) |
+| `index.py`, `store.py`, `setops.py` | inverted index (`array('I')` postings + positions), `.fidx`/pickle storage, merges (Lab 2) |
+| `query.py`, `scoring.py`, `search.py`, `snippets.py` | query parser, BM25/TF-IDF, ranked search, snippets (Lab 3) |
+| `cli.py` | `findex index / search / stats / crawl / serve / embed` (Labs 4–8) |
+| `parallel.py` | partial indexes + merge on serial/threads/processes (Lab 5) |
+| `crawler/` | async crawler: fetch, robots, frontier, HTML extraction (Lab 6) |
+| `web/` | FastAPI app, Jinja templates, static CSS (Lab 7) |
+| `fast.py`, `semantic.py` | NumPy scorer; embeddings, semantic + RRF hybrid search (Lab 8) |
+| `scripts/` | corpus download, benchmarks for every lab, local crawl mirror, race demo |
+| `docs/` | plots, profiles, flame graphs, crawl logs, benchmark data |
+
+### Limitations
+
+* **Scale.** The whole vocabulary lives in the `.fidx` JSON header and the term dict, and posting
+  lists are uncompressed `uint32`. That's fine at ~100 K terms and tens of MB, but past a few GB
+  you'd want a term dictionary on disk (FST / sorted blocks), gap + varint compressed postings, and
+  segment merging instead of one monolithic rebuild.
+* **No incremental updates.** Any corpus change means a full re-index (5–16 s here). The crawler
+  doesn't do conditional requests (`ETag`) yet.
+* **Semantic search is brute force.** `E @ q` over every chunk is ~38,700 dot products, which
+  is fast here but linear. Millions of chunks would need an ANN index (HNSW/FAISS), and the
+  384-d float32 matrix would need quantization to fit in RAM. The deployed Docker image doesn't
+  include torch, so semantic search is local-only.
+* **Ranking.** Only BM25/TF-IDF + RRF. No stemming, synonyms, field boosts (title vs body), or
+  phrase proximity scoring. The evaluation is 15 hand-written queries with book-level relevance
+  labels: small and noisy.
+* **Tokenizer** is Unicode-aware but language-agnostic: no stemming, no CJK word segmentation.
+* **Not done here:** the public deployment, the GitHub Release/CI run, a demo video, and a `docker
+  build`. All of these are prepared but need the owner's accounts or tools.
+
+---
+
+# Lab journal
+
+Each lab below was committed and tagged (`lab-01` … `lab-08`) with its measurements.
+
+## Lab 01 — streams, not lists
+
+### Corpus
 
 Public-domain books from [Project Gutenberg](https://www.gutenberg.org/), one book = one document,
 licence header/footer stripped. `data/` is git-ignored; to get the corpus:
@@ -16,7 +113,7 @@ uv run python scripts/fetch_gutenberg.py 1342 84  # or pick ebook IDs
 `iter_documents` also reads directories of `.txt`, JSON-lines files (`{"text": ...}` per line,
 e.g. arXiv abstracts), and `.gz` / `.bz2` versions of both without extracting them.
 
-## Usage
+### Usage
 
 ```bash
 uv sync
@@ -28,7 +125,7 @@ uv run ruff check
 uv run python scripts/repl_experiments.py          # the five "prove it to yourself" experiments
 ```
 
-## Layout
+### Lab 01 layout
 
 | File | What |
 |---|---|
@@ -37,7 +134,7 @@ uv run python scripts/repl_experiments.py          # the five "prove it to yours
 | `src/findex/stats.py` | the lazy pipeline, the eager twin, `tracemalloc` measurement, CLI |
 | `tests/` | tokenizer policy checks + corpus loader checks |
 
-## Tokenizer policy
+### Tokenizer policy
 
 | Case | Input | Tokens |
 |---|---|---|
@@ -52,7 +149,7 @@ uv run python scripts/repl_experiments.py          # the five "prove it to yours
 Letters are any Unicode letter/digit (`\w` minus `_`), so Cyrillic, Greek and CJK work.
 Combining marks stay attached to their letter when NFC has no precomposed form.
 
-## Eager vs lazy
+### Eager vs lazy
 
 Measured with `python -m findex.stats data/ --compare` (same corpus, same tokenizer, `tracemalloc`
 peak; tracemalloc slows both runs equally).
@@ -601,3 +698,139 @@ process decodes and caches its own copy of every posting list it touches.
 4. Put the URL at the top of this README, then run
    `python scripts/bench_lab07.py load --url https://<app>.onrender.com --concurrency 20` for the
    "deployed" row.
+
+## Lab 08 — fast, then smart
+
+```bash
+uv run python scripts/bench_lab08.py profile     # cProfile -> docs/profile_index.txt, profile_search.txt
+py-spy record -o docs/flame_search.svg -- python scripts/search_loop.py python
+uv run python scripts/bench_lab08.py speed       # the speedup table
+uv run pytest tests/test_benchmarks.py --benchmark-only
+uv sync --extra semantic && uv run findex embed index.fidx
+uv run python scripts/bench_lab08.py eval        # 15-query precision@5
+```
+
+### M1 — profile first, then write the hotspots down
+
+The profiles are cProfile text in `docs/profile_*.txt` and py-spy flame graphs in
+[`docs/flame_index.svg`](docs/flame_index.svg) and [`docs/flame_search.svg`](docs/flame_search.svg).
+The hotspots and a hypothesis for each were written into [`docs/hotspots.md`](docs/hotspots.md)
+*before* any change, and outcomes were added afterwards. The Python-vs-native split comes from
+cProfile, which lists C builtins separately from Python functions. Scalene 2.4 on Windows runs
+the target inside its own thread and attributed every sample to `threading.py`, so it gave
+nothing usable on this machine.
+
+* **Search (Lab 3 engine):** ~60% of the time goes to `BM25.score()`, called once per posting
+  (43 K calls for a 3-term query), and ~15% to the dict accumulator. All of that is Python-level
+  interpreter overhead. → **Vectorize** (below).
+* **Index:** the tokenizer generator plus `str.translate` per token (5.9 M calls, 4.2 s under
+  cProfile), and the per-(doc, term) appends. The hypothesis was that translating once per
+  *document* would remove the translate cost. **The hypothesis was wrong:** a direct benchmark
+  showed per-token translate at 0.80 s vs per-document at 0.89 s (the document-level version
+  copies the whole text), and full builds were within noise. cProfile's per-call overhead had
+  inflated 5.9 M cheap C calls. The change was reverted. Lesson: confirm a deterministic
+  profiler's hotspot with a direct measurement before optimizing it.
+
+### M2 — the vectorized scorer (`fast.py`)
+
+Postings are viewed as NumPy arrays with **zero copies**: `np.frombuffer` over the existing
+`array('I')` buffers. `doc_len` becomes one `float64[N]` array. BM25 for a term is a handful of
+array expressions over its whole posting list, accumulated into a dense `float64[N]` score vector
+with `acc[ids] += scores` (ids are unique within a list, so `np.add.at` isn't needed). Top-k is
+`np.argpartition`, O(n), on the matched documents only. Ties are broken exactly as in Lab 3:
+everything at the cutoff score is kept, then `np.lexsort` by (score desc, doc id asc).
+**Rankings are identical to Lab 3's**: `tests/test_fast.py` compares document order and scores
+(relative tolerance 1e-12) for 10 queries × 3 scorer settings on the fixture corpus, plus random
+corpora with pagination. The web API and CLI now use it by default; `--engine python` keeps the
+Lab 3 path.
+
+Best of 20 runs, with the query cache warm, so both sides measure scoring only:
+
+| Query | Docs matched | Lab 3 scorer (ms) | NumPy scorer (ms) | Speedup |
+|---|---|---|---|---|
+| common term `the` | 3,876 | 7.65 | 0.15 | **51.3×** |
+| mid term `whale` | 137 | 0.30 | 0.07 | 4.6× |
+| rare term `00` | 3 | 0.01 | 0.04 | **0.4×** |
+| 3-term query (OR) `whale OR ship OR captain` | 606 | 1.70 | 0.12 | 13.9× |
+| 3-term query (AND) `whale ship captain` | 60 | 0.39 | 0.12 | 3.4× |
+
+**Why the speedup varies 100×.** For `the`, the Python scorer does ~3,900 method calls, each
+with attribute lookups, boxing floats, and a dict update. NumPy does about ten array operations over
+3,876 elements in C loops: per-element cost goes from ~2 µs to a few ns. For the rare term there
+are 3 postings, so the Python loop is ~10 µs, while NumPy has a fixed ~40 µs of setup (creating
+arrays, `frombuffer`, `argpartition`, `lexsort`, converting results). With 3 elements, that
+overhead *is* the work, which makes NumPy 2.5× slower. Vectorization pays off in proportion to
+array length. A production engine would pick the path by posting-list length; here the
+absolute numbers on the slow side are tens of microseconds, so one path is kept.
+
+**Regression guard in CI:** `tests/test_benchmarks.py` (pytest-benchmark) times `build_index`,
+both scorers and search. It also asserts the NumPy scorer stays **>5× faster** than the Python
+scorer on a 3,000-document synthetic corpus. That ratio holds on any machine, unlike an absolute
+time. Locally it measured **75×** (236 µs vs 17.7 ms).
+
+### M3 — semantic and hybrid search (`semantic.py`)
+
+* **`findex embed index.fidx`:** splits every document into ~200-word chunks with 40 words of
+  overlap, embeds them with `sentence-transformers/all-MiniLM-L6-v2` on CPU, L2-normalizes, and
+  saves `index.emb.npy` (`float32[n_chunks, 384]`), `index.emb.chunks.npy` (chunk → doc id, char
+  offset) and `index.emb.json`. For this corpus that's 38,699 chunks and a 57 MiB matrix, which took ~25 min on the CPU (6 cores, with other benchmarks running).
+* **Semantic:** embed the query (normalized); `E @ q` is the cosine similarity with every chunk
+  in one matrix-vector product (a dot product equals cosine once both sides are unit length).
+  `argpartition` finds the top chunks, and each document keeps its **best chunk**. That chunk's
+  offset becomes the snippet anchor, so the snippet shows the passage that matched, not the start
+  of the section.
+* **Hybrid:** Reciprocal Rank Fusion of the keyword ranking (BM25 over the query's words, OR-ed)
+  and the semantic ranking, `Σ 1/(60 + rank)`. Fusing *ranks* means BM25's unbounded scores and
+  cosine's [-1, 1] never need to be put on one scale.
+* `mode=keyword|semantic|hybrid` is available in the CLI (`--mode`), the API (`/search?mode=`)
+  and the UI (a toggle that appears when embeddings are present). The plumbing is tested with a
+  fake encoder (`tests/test_semantic.py`), so CI needs neither torch nor a model download.
+
+### precision@5: keyword vs semantic vs hybrid (10 original + 5 paraphrase queries)
+
+Same relevance rule as Lab 3 (a section is relevant if it comes from the right book). Keyword =
+BM25 over the OR-ed words; semantic = best-chunk cosine; hybrid = RRF of the two.
+
+| Query | Kind | Keyword | Semantic | Hybrid |
+|---|---|---|---|---|
+| whale ship captain harpoon | original | 1.0 | 1.0 | 1.0 |
+| detective crime clue | original | 0.8 | 0.6 | 0.8 |
+| vampire blood garlic | original | 0.8 | 1.0 | 0.8 |
+| battle emperor army retreat | original | 0.8 | 0.8 | 0.8 |
+| prince fortune cruelty state | original | 1.0 | 1.0 | 1.0 |
+| marriage fortune ball sisters | original | 1.0 | 0.2 | 0.4 |
+| pirates treasure island map | original | 0.8 | 1.0 | 1.0 |
+| creature creation science despair | original | 0.8 | 0.6 | 0.8 |
+| sovereign commonwealth covenant | original | 1.0 | 1.0 | 1.0 |
+| justice soul guardians city | original | 1.0 | 0.6 | 1.0 |
+| a sailor obsessed with hunting a giant sea creature | paraphrase | 0.6 | **1.0** | 0.8 |
+| an undead nobleman who drinks human blood | paraphrase | 0.0 | 0.0 | 0.2 |
+| a scientist who brings a dead body back to life | paraphrase | 0.0 | 0.2 | 0.0 |
+| how a ruler should keep power over his subjects | paraphrase | 0.0 | 0.2 | 0.0 |
+| a young girl falls down a hole into a strange land | paraphrase | 0.0 | 0.2 | 0.2 |
+| **mean, original** | | **0.90** | 0.78 | 0.86 |
+| **mean, paraphrase** | | 0.12 | **0.32** | 0.24 |
+
+**Reading it.**
+* **Keyword wins when the user knows the words.** The original queries were written from the
+  books' own vocabulary, and BM25 rewards exactly that. Semantic search loses most on *marriage
+  fortune ball sisters* (0.2). Our reading: many 19th-century novels have passages about marriage
+  and fortune, so what makes a section *Pride and Prejudice* is the *combination* of words. BM25's
+  per-term idf captures that; a single 384-d vector of the passage's overall meaning seems to blur it.
+* **Semantic wins when the user doesn't know the words.** *A sailor obsessed with hunting a giant
+  sea creature* never says "whale", yet semantic gets 5/5 from *Moby-Dick*. Keyword only manages
+  0.6 via "sea" and "sailor".
+* **Paraphrases are still mostly failures, and the reason is chunking.** For *an undead nobleman
+  who drinks human blood*, the top cosine scores were all ~0.46, spread across *The Republic*,
+  *War and Peace* and *Zarathustra*. The query describes a *book's plot*, and no 200-word passage
+  of *Dracula* literally says that. Passage embeddings answer "which page talks about this?", not
+  "which book is about this?". Fixes would be a summary embedding per book or chapter, or a larger
+  model (MiniLM-L6 is the small, fast option).
+* **Hybrid is the safe default, not the best on any row.** RRF can't beat its better input. It
+  averages the two rankings, so it keeps keyword's strength on the originals (0.86 vs 0.90) and
+  roughly doubles keyword's score on paraphrases (0.24 vs 0.12). When you don't know which kind
+  of query is coming, that's the trade you want. On *undead nobleman* it was the only mode that
+  put any *Dracula* section in the top 5.
+* 15 queries with book-level labels is a smoke test, not a benchmark. A single query moves a mean
+  by 0.06–0.2.
+

@@ -1,6 +1,6 @@
 """findex — a search engine built one lab at a time."""
 
-__version__ = "0.7.0"
+__version__ = "1.0.0"
 
 from findex.corpus import Document, iter_documents  # noqa: E402
 from findex.tokenize import tokenize  # noqa: E402

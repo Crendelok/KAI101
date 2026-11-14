@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.163.0",
     "httpx>=0.28.1",
     "jinja2>=3.1.6",
+    "numpy>=2.5.4",
     "pydantic-settings>=2.16.3",
     "rich>=13.7",
     "typer>=0.12",
@@ -27,6 +28,11 @@ dependencies = [
 
 [project.scripts]
 findex = "findex.cli:app"
+
+[project.optional-dependencies]
+semantic = [
+    "sentence-transformers>=6.3.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -39,8 +45,10 @@ path = "src/findex/__init__.py"
 dev = [
     "hypothesis>=6.100",
     "matplotlib>=3.11.2",
+    "py-spy>=0.4.3",
     "pyright>=1.1.380",
     "pytest>=8",
+    "pytest-benchmark>=5.3.1",
     "pytest-cov>=5",
     "ruff>=0.6",
     "truststore>=0.10.5",

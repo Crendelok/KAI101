@@ -24,10 +24,11 @@ from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
 from findex import __version__
+from findex.fast import search_fast
 from findex.index import Index
 from findex.query import QueryError
 from findex.scoring import get_scorer
-from findex.search import search, snippet_for
+from findex.search import snippet_for
 from findex.store import load
 from findex.web.models import (
     DocumentResponse,
@@ -102,12 +103,12 @@ def run_search(
         results = search_mode(index, semantic, q, mode=mode, k=k, offset=offset, scorer=scorer)
     else:
         try:
-            results = search(index, q, get_scorer(scorer), k, offset=offset)
+            results = search_fast(index, q, get_scorer(scorer), k, offset=offset)
         except QueryError as exc:
             raise HTTPException(status_code=400, detail=f"bad query: {exc}") from exc
     hits: list[SearchHit] = []
     for r in results:
-        snip = snippet_for(index, r.doc_id, results.terms)
+        snip = snippet_for(index, r.doc_id, results.terms, results.anchors.get(r.doc_id))
         hits.append(
             SearchHit(
                 doc_id=r.doc_id,
@@ -155,7 +156,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 from findex.semantic import SemanticIndex
 
-                app.state.semantic = await run_in_threadpool(SemanticIndex.load, emb)
+                sem = await run_in_threadpool(SemanticIndex.load, emb)
+                # Load the model now (~20 s cold), not inside the first user's request.
+                await run_in_threadpool(sem.encode, "warm up")
+                app.state.semantic = sem
                 log.info("semantic search enabled (%s)", emb)
             except (ImportError, OSError, ValueError) as exc:
                 log.warning("semantic search disabled: %s", exc)

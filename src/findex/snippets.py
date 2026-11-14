@@ -37,6 +37,12 @@ class Snippet:
     def plain(self) -> str:
         return self.highlight("«", "»")
 
+    def with_leading_ellipsis(self, ellipsis: bool = True) -> Snippet:
+        """Prepend "…" (for a snippet cut from the middle of a document)."""
+        if not ellipsis or self.text.startswith("…"):
+            return self
+        return Snippet("…" + self.text, tuple((s + 1, e + 1) for s, e in self.spans))
+
 
 def make_snippet(text: str, terms: Collection[str], radius: int = RADIUS) -> Snippet:
     """Pick the window (centred on a match) that contains the most distinct query terms."""

@@ -51,7 +51,12 @@ def server(port: int, *extra: str) -> Iterator[str]:
             raise RuntimeError("server did not become healthy")
         yield base
     finally:
-        proc.terminate()
+        if sys.platform == "win32":
+            # terminate() would kill only findex.exe; uvicorn's worker processes would be
+            # orphaned (Windows doesn't kill children with their parent). Kill the tree.
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True)
+        else:
+            proc.terminate()
         proc.wait()
 
 

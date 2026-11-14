@@ -53,6 +53,17 @@ class ExecutorChoice(StrEnum):
     processes = "processes"
 
 
+class ModeChoice(StrEnum):
+    keyword = "keyword"
+    semantic = "semantic"
+    hybrid = "hybrid"
+
+
+class EngineChoice(StrEnum):
+    numpy = "numpy"
+    python = "python"
+
+
 def _configure_logging(verbosity: int) -> None:
     level = {0: logging.WARNING, 1: logging.INFO}.get(verbosity, logging.DEBUG)
     logging.basicConfig(
@@ -175,17 +186,36 @@ def search_cmd(
     query: Annotated[str, typer.Argument(help='Query: words, OR, NOT, ( ), "phrases".')],
     k: Annotated[int, typer.Option("--k", "-k", min=1, max=1000, help="Results to show.")] = 10,
     scorer: Annotated[ScorerChoice, typer.Option(help="Ranking function.")] = ScorerChoice.bm25,
+    mode: Annotated[
+        ModeChoice, typer.Option(help="keyword, or semantic/hybrid after `findex embed`.")
+    ] = ModeChoice.keyword,
+    engine: Annotated[
+        EngineChoice, typer.Option(help="Scorer implementation (identical rankings).")
+    ] = EngineChoice.numpy,
     as_json: Annotated[bool, typer.Option("--json", help="JSON lines on stdout.")] = False,
 ) -> None:
     """Search an index and print ranked results with snippets."""
     index = _load(index_path)
     try:
-        results = search(index, query, get_scorer(scorer.value), k)
+        if mode is not ModeChoice.keyword:
+            from findex.semantic import SemanticIndex, emb_paths, search_mode
+
+            e_path = emb_paths(index_path)[0]
+            if not e_path.exists():
+                raise _fail(f"no embeddings at {e_path}: run `findex embed {index_path}` first")
+            sem = SemanticIndex.load(e_path)
+            results = search_mode(index, sem, query, mode=mode.value, k=k, scorer=scorer.value)
+        elif engine is EngineChoice.numpy:
+            from findex.fast import search_fast
+
+            results = search_fast(index, query, get_scorer(scorer.value), k)
+        else:
+            results = search(index, query, get_scorer(scorer.value), k)
     except QueryError as exc:
         raise _fail(f"bad query: {exc}", code=2) from exc
     if as_json:
         for rank, r in enumerate(results, start=1):
-            snip = snippet_for(index, r.doc_id, results.terms)
+            snip = snippet_for(index, r.doc_id, results.terms, results.anchors.get(r.doc_id))
             record = {
                 "rank": rank,
                 "doc_id": r.doc_id,
@@ -201,9 +231,42 @@ def search_cmd(
     table.add_column("score", justify="right")
     table.add_column("document")
     for rank, r in enumerate(results, start=1):
-        snip = snippet_for(index, r.doc_id, results.terms)
-        table.add_row(str(rank), f"{r.score:.2f}", f"[bold]{r.title}[/]\n{snip.rich()}")
+        snip = snippet_for(index, r.doc_id, results.terms, results.anchors.get(r.doc_id))
+        table.add_row(str(rank), f"{r.score:.3f}", f"[bold]{r.title}[/]\n{snip.rich()}")
     out.print(table)
+
+
+@app.command("embed")
+def embed_cmd(
+    index_path: Annotated[Path, typer.Argument(help="Index file to embed.")],
+    model: Annotated[str, typer.Option(help="sentence-transformers model.")] = (
+        "sentence-transformers/all-MiniLM-L6-v2"
+    ),
+    words: Annotated[int, typer.Option(min=20, help="Words per chunk.")] = 200,
+    overlap: Annotated[int, typer.Option(min=0, help="Words shared by neighbouring chunks.")] = 40,
+) -> None:
+    """Embed every document chunk for semantic/hybrid search (needs the `semantic` extra)."""
+    try:
+        from findex.semantic import build_embeddings
+    except ImportError as exc:
+        raise _fail("semantic search needs: uv sync --extra semantic") from exc
+    index = _load(index_path)
+    with Progress(
+        TextColumn("[bold]embedding chunks"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=err,
+    ) as progress:
+        task = progress.add_task("chunks", total=None)
+
+        def update(done: int, total: int) -> None:
+            progress.update(task, completed=done, total=total)
+
+        path = build_embeddings(
+            index, index_path, model_name=model, words=words, overlap=overlap, progress=update
+        )
+    err.print(f"[green]✓[/] embeddings → {path}")
 
 
 @app.command("stats")
