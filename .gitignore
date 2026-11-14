@@ -1,5 +1,10 @@
 # corpora never go in git
 data/
+# built artifacts
+*.fidx
+*.pkl
+*.npy
+crawl.log
 
 __pycache__/
 *.py[cod]

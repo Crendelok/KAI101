@@ -36,4 +36,5 @@ def test_lazy_first_document(tmp_path):
         (tmp_path / f"{i}.txt").write_text(f"doc {i}", encoding="utf-8")
     gen = iter_documents(tmp_path)
     first = next(gen)  # returns after reading exactly one file
-    assert first.doc_id == "0"
+    assert first.doc_id == 0
+    assert first.title == "doc 0"

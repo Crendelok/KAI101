@@ -1,4 +1,4 @@
-"""M2 — a streaming tokenizer.
+"""A streaming tokenizer (Lab 1).
 
 Pipeline per document: NFC-normalize -> casefold -> ``re.finditer`` (lazy).
 
@@ -12,7 +12,6 @@ Token policy
   ``don't``, ``o'clock``, ``п'ять``, ``пʼять`` (U+02BC) and ``don’t`` (U+2019)
   all produce the same token. Leading/trailing apostrophes (quotes) are dropped.
 * **Hyphens split**: ``state-of-the-art`` -> ``state``, ``of``, ``the``, ``art``.
-  Users search for the parts far more often than for the compound.
 * **Digits are kept**, alone or mixed: ``2024``, ``python3``, ``3d``.
   ``3.14`` -> ``3``, ``14`` (punctuation always splits).
 * **Underscore splits** (``snake_case`` -> ``snake``, ``case``).
@@ -41,3 +40,19 @@ def tokenize(text: str) -> Iterator[str]:
     """Yield normalized tokens from `text`, lazily."""
     for match in TOKEN_RE.finditer(normalize(text)):
         yield match.group().translate(_APOS_TABLE)
+
+
+def find_tokens(text: str) -> Iterator[tuple[str, int, int]]:
+    """Yield ``(token, start, end)`` with character offsets into the *original* text.
+
+    Used for snippets. Offsets are exact when NFC + casefold preserve length
+    (true for almost all text); otherwise they are clamped approximations.
+    """
+    norm = normalize(text)
+    exact = len(norm) == len(text)
+    scale = len(text) / max(len(norm), 1)
+    for match in TOKEN_RE.finditer(norm):
+        start, end = match.span()
+        if not exact:
+            start, end = int(start * scale), int(end * scale)
+        yield match.group().translate(_APOS_TABLE), start, end

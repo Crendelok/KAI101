@@ -3,7 +3,7 @@ name = "findex"
 version = "0.1.0"
 description = "A search engine built from scratch, one lab at a time."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [build-system]

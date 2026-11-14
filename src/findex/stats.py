@@ -1,9 +1,9 @@
 """M3 + M4 — the stats pipeline, and its deliberately eager twin.
 
-    python -m findex.stats data/                  # lazy pipeline, top-50 terms
-    python -m findex.stats data/ --limit 100      # first 100 docs (itertools.islice)
-    python -m findex.stats data/ --eager          # the list-based version
-    python -m findex.stats data/ --compare        # both, as a README table
+python -m findex.stats data/                  # lazy pipeline, top-50 terms
+python -m findex.stats data/ --limit 100      # first 100 docs (itertools.islice)
+python -m findex.stats data/ --eager          # the list-based version
+python -m findex.stats data/ --compare        # both, as a README table
 """
 
 from __future__ import annotations
@@ -104,8 +104,11 @@ def print_report(label: str, m: Measured, top: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="python -m findex.stats", description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(
+        prog="python -m findex.stats",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     p.add_argument("root", type=Path, help="corpus dir or file (.txt/.jsonl, opt. .gz/.bz2)")
     p.add_argument("--limit", type=int, default=None, help="only the first N documents")
     p.add_argument("--top", type=int, default=50, help="how many top terms to print (default 50)")
@@ -126,8 +129,10 @@ def main(argv: list[str] | None = None) -> int:
         print("| Version | Documents | Tokens | Peak memory | Elapsed |")
         print("|---|---|---|---|---|")
         for label, m in (("eager (lists)", eager), ("lazy (generators)", lazy)):
-            print(f"| {label} | {m.stats.documents:,} | {m.stats.tokens:,} "
-                  f"| {human_bytes(m.peak_bytes)} | {m.elapsed:.2f} s |")
+            print(
+                f"| {label} | {m.stats.documents:,} | {m.stats.tokens:,} "
+                f"| {human_bytes(m.peak_bytes)} | {m.elapsed:.2f} s |"
+            )
         return 0
 
     fn, label = (eager_stats, "eager") if args.eager else (lazy_stats, "lazy")
