@@ -8,7 +8,7 @@ semantic + hybrid search. Built over the eight labs of
 
 > **Live demo:** _add the Render URL here after deploying_ (see [Deploy](#deploy-render)) ·
 > **Demo GIF / video:** _record and add here_ ·
-> [![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+> [![CI](https://github.com/Crendelok/KAI101/actions/workflows/ci.yml/badge.svg)](https://github.com/Crendelok/KAI101/actions/workflows/ci.yml)
 
 ### Headline numbers (40 Gutenberg books, 3,876 sections, 5.9 M tokens; Ryzen 5 3600)
 
@@ -337,8 +337,7 @@ are all about 1,500 words, so length normalization barely matters here.
 
 ## Lab 04 — a real tool: typed, tested, packaged
 
-<!-- After pushing to GitHub, replace OWNER/REPO: -->
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/Crendelok/KAI101/actions/workflows/ci.yml/badge.svg)](https://github.com/Crendelok/KAI101/actions/workflows/ci.yml)
 
 ```bash
 uv tool install .                     # puts `findex` on PATH
@@ -354,7 +353,7 @@ From a release wheel, on any machine with `uv`:
 ```bash
 uv build                                              # dist/findex-0.4.0-py3-none-any.whl
 uvx --from ./dist/findex-0.4.0-py3-none-any.whl findex --help
-uv tool install https://github.com/OWNER/REPO/releases/download/v0.4.0/findex-0.4.0-py3-none-any.whl
+uv tool install https://github.com/Crendelok/KAI101/releases/download/v0.4.0/findex-0.4.0-py3-none-any.whl
 ```
 
 * **Typing:** `pyright` in strict mode, 0 errors. `Scorer` is a `typing.Protocol`. Generators are
@@ -520,7 +519,7 @@ response, a one-time `429 Retry-After: 1` on ~1 in 20 pages, a one-time `503` on
 ```bash
 python scripts/site_server.py &                                   # the mirror
 findex crawl http://127.0.0.1:8101/ --max-pages 200 --concurrency 20 --per-host 4 \
-    --out data/crawl.jsonl --log crawl.log --contact https://github.com/OWNER/REPO
+    --out data/crawl.jsonl --log crawl.log --contact https://github.com/Crendelok/KAI101
 findex index data/crawl.jsonl --out crawl.fidx                    # indexing happens *after*, outside the loop
 findex search crawl.fidx whale
 uv run python scripts/bench_lab06.py --max-pages 200              # the table below

@@ -346,7 +346,7 @@ def crawl_cmd(
         "crawl.log"
     ),
     contact: Annotated[str, typer.Option(help="Contact URL in the User-Agent.")] = (
-        "https://github.com/OWNER/REPO"
+        "https://github.com/Crendelok/KAI101"
     ),
     debug: Annotated[bool, typer.Option(help="asyncio debug mode: report blocking calls.")] = False,
 ) -> None:

@@ -33,7 +33,7 @@ from findex.crawler.urls import canonicalize, domain_of, host_of, seen_key
 log = logging.getLogger(__name__)
 url_log = logging.getLogger("findex.crawl.urls")  # one line per URL -> crawl.log
 
-DEFAULT_CONTACT = "https://github.com/OWNER/REPO"
+DEFAULT_CONTACT = "https://github.com/Crendelok/KAI101"
 
 
 def user_agent(contact: str = DEFAULT_CONTACT) -> str:
